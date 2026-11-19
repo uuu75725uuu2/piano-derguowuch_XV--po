@@ -116,6 +116,7 @@
   .flash.ok{background:rgba(80,200,120,.25);transition:none}
   .hit{width:14px;height:14px;border-radius:50%;background:#e2ddd3;transition:background .15s}
   .hit.on{background:#2fbf5f;transition:none}
+  .hit.miss{background:#e4583e;transition:none}
   .hidenames #want,.hidenames #heardBox{visibility:hidden}
   #nameBtn.off{opacity:.5;text-decoration:line-through}
   #msg{font-size:13px;color:#b04a2e}
@@ -158,7 +159,7 @@
     <div class="ctrls">
       <button id="play">▶ 播放</button>
       <button id="restart">⟲ 從頭</button>
-      <div class="tempo">🐢<input type="range" id="tempo" min="40" max="132" step="2" value="72">🐇<b id="tempoTxt">72 拍/分</b><button id="origTempo" style="padding:6px 10px;font-size:14px;background:#ece7dd">原速 108</button></div>
+      <div class="tempo">🐢<input type="range" id="tempo" min="40" max="132" step="2" value="72">🐇<b id="tempoTxt">72 拍/分</b><button id="origTempo" style="white-space:nowrap;padding:6px 10px;font-size:14px;background:#ece7dd">原速 108</button></div>
     
     <div class="opts">
       <label>模式：<select id="mode"><option value="auto">自動播放</option><option value="mic">🎤 聽我彈（麥克風）</option><option value="tap">👆 點琴鍵跟彈</option></select></label>
@@ -230,17 +231,8 @@ function beatAt(x,y){const s=y<470?SYS[0]:SYS[1],A=s.a;x+=OX;if(x<=A[0][1])retur
 // 框只畫外框、不填色，音符完全看得清楚
 const hlR=el('rect',{width:64,rx:16,fill:'none',stroke:'#e4583e','stroke-width':4,opacity:0});
 const hlL=el('rect',{width:64,rx:16,fill:'none',stroke:'#1d8a86','stroke-width':4,opacity:0});
-// 每行譜上方的進度條（走過的部分變橘色）
-const bars=SYS.map(sy=>{ const y=sy.y1-(sy.from===0?26:14); x0=sy.a[0][1]-OX, x1=sy.a[sy.a.length-1][1]-OX;
-  el('line',{x1:x0,x2:x1,y1:y,y2:y,stroke:'#000','stroke-opacity':.12,'stroke-width':8,'stroke-linecap':'round'});
-  const done=el('line',{x1:x0,x2:x0,y1:y,y2:y,stroke:'#f2a900','stroke-width':8,'stroke-linecap':'round'});
-  return {sy,done,x0,y}; });
-// 時間軸
-const ph=el('g',{});
-// 時間軸：只在譜的上方和下方各放一個箭頭，不畫穿過音符的線
-el('circle',{cx:0,cy:-14,r:13,fill:'#f2a900',stroke:'#fff','stroke-width':3,id:'phdot'},ph);
-el('path',{d:'M-12 2 L12 2 L0 18 Z',fill:'#f2a900',id:'phtri'},ph);
-const phBot=el('path',{d:'M-12 0 L12 0 L0 -16 Z',fill:'#f2a900'});
+// 時間軸：一塊半透明的色塊，蓋住整行譜（左右手），跟著拍子平順移動
+const ph=el('rect',{x:-34,y:0,width:68,height:10,rx:12,fill:'#f2a900','fill-opacity':.2,stroke:'#f2a900','stroke-opacity':.35,'stroke-width':2});
 function placeBox(r,b,range){const x=xOf(b);r.setAttribute('x',x-32);r.setAttribute('y',range[0]);r.setAttribute('height',range[1]-range[0]);r.setAttribute('opacity',1);}
 // 段落資訊給畫面用
 const handLayer={rh:{classList:{toggle(){}}},lh:{classList:{toggle(){}}}};
@@ -316,20 +308,28 @@ function scheduler(){
 }
 setInterval(scheduler,25);
 
-function start(){
+let startLt=0;
+function start(noCount){
   ensureAudio();
   if(lt>=endLt()) lt=0;
-  playing=true; anchorCtx=ctx.currentTime+0.05;
-  if(opt.cnt){ anchorLt=lt-3; clicks=[lt-3,lt-2,lt-1]; } else { anchorLt=lt; clicks=[]; }
-  schedUpTo=anchorLt; $('play').textContent='⏸ 暫停';
+  playing=true; anchorCtx=ctx.currentTime+0.05; startLt=lt; clicks=[];
+  const cnt = opt.cnt && !noCount;
+  anchorLt = cnt ? lt-3 : lt;                 // 預備拍期間時間軸停在原地，不會先往回跳
+  if(cnt) for(let i=0;i<3;i++) click(ctxAt(lt-3+i), true);
+  schedUpTo=lt;                               // 只從選的位置開始發聲
+  $('play').textContent='⏸ 暫停';
 }
 function stop(){
-  lt=Math.max(0,nowLt()); playing=false; clicks=[];
+  lt=Math.max(startLt,nowLt()); playing=false; clicks=[];
   if(ctx) live.forEach(o=>{try{o.stop();}catch(_){}}); live.clear();
   $('play').textContent='▶ 播放';
 }
 var seek=function(l){
-  const was=playing; if(was) stop(); lt=l; if(was) start();
+  const was=playing, cur=nowLt();
+  if(was) stop();
+  if(opt.rep && cur>=END && l>=1) l+=24;      // 正在彈第二遍時，跳到第二遍的同一個位置
+  lt=l; startLt=l;
+  if(was) start(true);                        // 播放中點音符：直接從那裡接著彈，不再數預備拍
 }
 $('play').onclick=()=>playing?stop():start();
 $('restart').onclick=()=>seek(0);
@@ -365,12 +365,14 @@ function findAt(hand,b){ return events.find(e=>e.hand===hand && b>=e.b-1e-6 && b
 function findNext(hand,b){ return events.filter(e=>e.hand===hand && e.b>b+1e-6 && !e.rest).sort((a,c)=>a.b-c.b)[0]; }
 let lastKey='';
 function frame(){
-  const l=nowLt();
-  const b=toScore(l);
+  const raw=nowLt();
+  const inCount = playing && raw<startLt;     // 預備拍中
+  const l = inCount ? startLt : raw;
+  const b = inCount ? null : toScore(l);
   // 拍子
   const dots=[$('d1'),$('d2'),$('d3')];
   if(b===null){
-    const n=Math.ceil(-l); $('barLab').textContent='預備…';
+    const n=Math.ceil(startLt-raw); $('barLab').textContent='預備…';
     dots.forEach((d,i)=>d.classList.toggle('on', i===3-n)); $('countTxt').textContent='數到 3 就開始！';
   }else{
     const pass = (opt.rep && l>=END) ? '（第二遍）' : '';
@@ -381,12 +383,9 @@ function frame(){
     $('countTxt').textContent = (b%1>=0.5) ? '「和」(半拍)' : '數：'+beat;
   }
   // 播放線
-  const sb = b===null ? (toScore(Math.max(0,lt))??0) : b;
+  const sb = b===null ? (toScore(Math.max(0,l))??0) : b;
   const s=sysOf(Math.min(sb,24.99)), px=xOf(Math.min(sb,24.99));
-  ph.setAttribute('transform',`translate(${px},${s.y1})`);
-  ph.querySelector('#phdot').setAttribute('cy', s.from===0?-26:-14);
-  phBot.setAttribute('transform',`translate(${px},${s.y2+20})`);
-  bars.forEach(bb=>{ const x = bb.sy===s ? px : (bb.sy.from<s.from ? bb.sy.a[bb.sy.a.length-1][1]-OX : bb.x0); bb.done.setAttribute('x2',x); bb.done.setAttribute('opacity', x>bb.x0+1?1:0); });
+  ph.setAttribute('transform',`translate(${px},${s.y1})`); ph.setAttribute('height',s.y2-s.y1);
   if(playing||following){ const sc=inner.clientWidth/1920;
     wrap.scrollLeft = px*sc - wrap.clientWidth*0.35;
     wrap.scrollTop = ((s.y1+s.y2)/2)*sc - wrap.clientHeight/2; }
@@ -468,7 +467,7 @@ async function startMic(){
   sp.onaudioprocess=detectOnset;
   // Safari 的分析節點要接到輸出才會運作；用音量 0 接上，不會發出聲音
   const mute=micCtx.createGain(); mute.gain.value=0; analyser.connect(mute); sp.connect(mute); mute.connect(micCtx.destination);
-  hitCount=0; lastRms=0;
+  hitCount=0; lastRms=0; rejCount=0; lastWhy=''; pending=null; queue=[]; bigRing.fill(0);
   fbuf=new Float32Array(analyser.frequencyBinCount); tbuf=new Float32Array(analyser.fftSize);
   hist=[]; noise=0.002; ignoreUntil=performance.now()+600; onsetAt=0; lastAdvance=0;   // 開始後 0.6 秒內不判斷
   micTimer=setInterval(listen,25); $('msg').textContent='';
@@ -484,12 +483,99 @@ function fft(){ for(let i=0;i<FN;i++){ if(i<rev[i]){ let t=re[i];re[i]=re[rev[i]
     for(let i=0;i<FN;i+=size) for(let j=0;j<h;j++){ const c=Math.cos(ang*j), s_=Math.sin(ang*j);
       const a=i+j, b=a+h, tr=re[b]*c-im[b]*s_, ti=re[b]*s_+im[b]*c; re[b]=re[a]-tr; im[b]=im[a]-ti; re[a]+=tr; im[a]+=ti; } } }
 let ringPos=0, prevSpec=null, fluxHist=[];
+/* ===== 鋼琴聲辨識與音準分析 =====
+   每偵測到一次「可能是按鍵」的瞬間，就比較按鍵前、按鍵後各約 0.17 秒的聲音：
+   1. 起音要很快（鋼琴是敲擊樂器，人聲、說話是慢慢變大的）
+   2. 敲下去後音量要往下降（人聲會撐住或變大）
+   3. 新增的聲音要有清楚的音高（拍手、敲桌子這類雜音沒有）
+   4. 音高要在鋼琴這首曲子的範圍附近
+   通過才算「鋼琴按鍵」，再用新增的頻譜判斷彈了哪些音。 */
+const BIG=32768, bigRing=new Float32Array(BIG);
+const BN=8192, bHann=new Float32Array(BN), bRe=new Float32Array(BN), bIm=new Float32Array(BN), bRev=new Uint16Array(BN);
+for(let i=0;i<BN;i++) bHann[i]=0.5-0.5*Math.cos(2*Math.PI*i/(BN-1));
+for(let i=0,j=0;i<BN;i++){ bRev[i]=j; let bit=BN>>1; while(j&bit){j^=bit;bit>>=1;} j|=bit; }
+const bCos=new Float32Array(BN/2), bSin=new Float32Array(BN/2); for(let i=0;i<BN/2;i++){bCos[i]=Math.cos(-2*Math.PI*i/BN);bSin[i]=Math.sin(-2*Math.PI*i/BN);}
+function bigFFT(){ for(let i=0;i<BN;i++){ const r=bRev[i]; if(i<r){ let t=bRe[i];bRe[i]=bRe[r];bRe[r]=t; t=bIm[i];bIm[i]=bIm[r];bIm[r]=t; } }
+  for(let size=2;size<=BN;size<<=1){ const h=size>>1, step=BN/size;
+    for(let i=0;i<BN;i+=size) for(let j=0;j<h;j++){ const c=bCos[j*step], s_=bSin[j*step];
+      const a=i+j, b=a+h, tr=bRe[b]*c-bIm[b]*s_, ti=bRe[b]*s_+bIm[b]*c; bRe[b]=bRe[a]-tr; bIm[b]=bIm[a]-ti; bRe[a]+=tr; bIm[a]+=ti; } } }
+const KMAX=Math.floor(BN*5000/44100);
+function specAt(start){ // 從絕對樣本位置 start 取 8192 點的頻譜（線性幅度）
+  for(let i=0;i<BN;i++){ bRe[i]=bigRing[(start+i)&(BIG-1)]*bHann[i]; bIm[i]=0; }
+  bigFFT(); const out=new Float32Array(KMAX); for(let k=0;k<KMAX;k++) out[k]=Math.hypot(bRe[k],bIm[k]); return out; }
+function rmsAt(start,n){ let s2=0; for(let i=0;i<n;i++){ const v=bigRing[(start+i)&(BIG-1)]; s2+=v*v; } return Math.sqrt(s2/n); }
+let pending=null, lastRes=null, queue=[];
+const LOWM=50, HIGHM=88;   // 分析的音高範圍 D3～E6
+function analyzeCandidate(t0,sr){
+  const binHz=sr/BN;
+  // --- 音量包絡：起音快、之後下降 ---
+  const H=256; const env=[]; for(let s0=t0-2048;s0<t0+BN+256;s0+=H) env.push(rmsAt(s0,H));
+  const preN=7, pre=env.slice(0,preN).reduce((a,b)=>a+b,0)/preN+1e-6;     // 按鍵前約 37 毫秒
+  const early=env.slice(8,8+6); const peak=Math.max(...early);            // 按鍵後約 32 毫秒內的最大音量
+  const after=env.slice(8+6), late=after.slice(-8).reduce((a,b)=>a+b,0)/8; // 後段（約 0.13～0.17 秒）
+  const maxAfter=Math.max(...after);
+  const attack=peak/pre;
+  const ix=ms=>8+Math.round(ms/1000*sr/H); const midA=env.slice(ix(60),ix(100)); const mid=midA.reduce((a,b)=>a+b,0)/midA.length;   // 60～100 毫秒
+  // --- 新增的頻譜 ---
+  const preS=specAt(t0-BN), postS=specAt(t0+256);
+  const nw=new Float32Array(KMAX); let mx=0;
+  for(let k=0;k<KMAX;k++){ const d=postS[k]-preS[k]*0.9; nw[k]=d>0?d:0; if(nw[k]>mx) mx=nw[k]; }
+  // 允許鋼琴音稍微不準（約 ±35 音分），家裡的琴常常沒有調得很準
+  const magAt=f=>{ const c=Math.round(f/binHz), w=Math.max(1,Math.round(f*0.0204/binHz)); if(c+w>=KMAX) return 0;
+    let m=0; for(let k=c-w;k<=c+w;k++) if(nw[k]>m) m=nw[k]; return m; };
+  const binAt=f=>{ const c=Math.round(f/binHz); return c<KMAX?nw[c]:0; };
+  const sal={}; let best=-1, bestM=0;
+  for(let m=LOWM;m<=HIGHM;m++){ const f=440*Math.pow(2,(m-69)/12); let v=0;
+    for(let h=1;h<=6;h++){ const ff=f*h; if(ff>4900) break; v+=magAt(ff)/Math.pow(h,0.6); }
+    sal[m]=v; if(v>best){best=v;bestM=m;} }
+  const sv=Object.values(sal).sort((a,b)=>a-b), med=sv[sv.length>>1]+1e-9;
+  // 頻譜平坦度（雜音很平、樂音有尖峰）
+  const k0=Math.floor(150/binHz), k1=Math.floor(4000/binHz); let lg=0, ar=0, n=0;
+  for(let k=k0;k<k1;k++){ const v=nw[k]+mx*1e-4; lg+=Math.log(v); ar+=v; n++; }
+  const flat=Math.exp(lg/n)/(ar/n);
+  const fundOK = magAt(440*Math.pow(2,(bestM-69)/12)) >= 0.12*mx;
+  return {binAt, attack, peak, late, mid, maxAfter, sal, best, bestM, med, flat, mx, magAt, binHz, fundOK};
+}
+function isPiano(r){
+  const v=+$('onsetSens').value;                 // 越靈敏，判定越寬鬆
+  const attK=1.1+(10-v)*0.05;  // 預設約 1.25
+  const okAttack = r.attack>=attK;
+  const okDecay  = r.maxAfter<=r.peak*1.3 && r.late<=r.peak*1.0 && r.mid>=r.peak*0.2;   // 會下降，但不會瞬間消失（敲桌子、拍手會）
+  const okTonal  = r.best/r.med>=5 && r.flat<0.35 && r.fundOK;
+  const okRange  = r.bestM>LOWM && r.bestM<HIGHM;
+  r.why = (okAttack?'':'起音慢 ')+(okDecay?'':(r.mid<r.peak*0.2?'消失太快 ':'沒衰減 '))+(okTonal?'':'沒音高 ')+(okRange?'':'音域外 ');
+  return okAttack&&okDecay&&okTonal&&okRange;
+}
+function noteOK(r,m,allWant){
+  const f=440*Math.pow(2,(m-69)/12), need=+$('sens').value;   // 音準門檻 6～35
+  const rel=0.12+(need-6)/29*0.45;                                // 預設約 0.25
+  const fund=r.magAt(f);
+  if(fund<0.10*r.mx) return false;                               // 基音要真的有出現
+  if(r.sal[m]<rel*r.best) return false;                          // 要是夠主要的音
+  const nb=Math.max(r.binAt(f/1.0595), r.binAt(f*1.0595));     // 相鄰半音只看正中間那一格
+  if(fund<nb*1.5) return false;                                  // 基音要比相鄰半音明顯（避免彈錯一個半音）
+  if(!allWant.includes(m-12) && (r.sal[m-12]||0)>r.sal[m]*1.1 && r.magAt(f/2)>0.5*fund) return false; // 其實是低八度
+  return true;
+}
+function onPianoHit(r){
+  hitCount++; onsetBlink(); lastRes=r;
+  if(!document.body.classList.contains('hidenames')) $('heard').textContent=nm(r.bestM);
+  if(!following || mode!=='mic') return;
+  const st=steps[stepIdx]; if(!st) return;
+  if(!$('pitchChk').checked){ advance(); return; }
+  const scope=$('pitchScope').value;
+  const want= scope==='rh'? st.rh : scope==='lh'? st.lh : st.midi;
+  if(!want.length){ advance(); return; }
+  if(want.every(m=>noteOK(r,m,st.midi))) advance();
+  else { const d=$('hitDot'); d.classList.add('miss'); setTimeout(()=>d.classList.remove('miss'),300); }
+}
 function detectOnset(ev){
   const x=ev.inputBuffer.getChannelData(0), H=512, sr=micCtx.sampleRate; spCalls++;
   const v=+$('onsetSens').value;                 // 1（遲鈍）～10（靈敏）
   const k=1.6+(10-v)*0.3;                        // 比剛剛（約 70 毫秒內）大幾倍，預設 2.5
   const c=2+(10-v)*0.35;                         // 比平常背景大幾倍，預設 3
   const k0=Math.floor(120*FN/sr), k1=Math.floor(5000*FN/sr);
+  for(let i=0;i<x.length;i++) bigRing[(sampleClock+i)&(BIG-1)]=x[i];
   for(let s0=0;s0+H<=x.length;s0+=H){
     ring.copyWithin(0,H); ring.set(x.subarray(s0,s0+H),FN-H);
     for(let i=0;i<FN;i++){ re[i]=ring[i]*hann[i]; im[i]=0; }
@@ -505,16 +591,22 @@ function detectOnset(ev){
       const sorted=fluxHist.slice().sort((a,b)=>a-b), base=sorted[sorted.length>>1];
       ok = flux>loc*k && flux>base*c;
     }
-    if(ok && t-lastOnsetSample>0.2*sr && performance.now()>ignoreUntil){
-      lastOnsetSample=t; onsetAt=performance.now(); onsetBlink();
+    if(ok && t-lastOnsetSample>0.12*sr && performance.now()>ignoreUntil){
+      lastOnsetSample=t; queue.push(t-512);          // 按鍵大約在這一格的開頭；排隊逐一分析
     }
     fluxHist.push(flux); if(fluxHist.length>40) fluxHist.shift();
   }
   sampleClock+=x.length;
+  while(queue.length && sampleClock>=queue[0]+256+BN){
+    const pending0=queue.shift(); const r=analyzeCandidate(pending0,sr);
+    const P=isPiano(r); if(window._cands) window._cands.push({t:+(pending0/sr).toFixed(2),P,att:+r.attack.toFixed(1),dec:+(r.maxAfter/r.peak).toFixed(2),late:+(r.late/r.peak).toFixed(2),mid:+(r.mid/r.peak).toFixed(2),ton:+(r.best/r.med).toFixed(1),flat:+r.flat.toFixed(2),m:r.bestM,fund:r.fundOK});
+    if(P) onPianoHit(r); else { rejCount++; lastWhy=r.why; }
+  }
 }
+let rejCount=0, lastWhy='';
 function stopMic(){ try{ if(micCtx) micCtx.close(); }catch(_){} micCtx=null; if(sp){sp.onaudioprocess=null;try{sp.disconnect();}catch(_){} sp=null;} if(micTimer)clearInterval(micTimer); micTimer=null; if(micStream)micStream.getTracks().forEach(t=>t.stop()); micStream=null; analyser=null; $('meter').style.width='0'; }
 function peakDb(f,binHz,w=2){ const c=Math.round(f/binHz); let m=-200; for(let k=c-w;k<=c+w;k++) if(fbuf[k]>m) m=fbuf[k]; return m; }
-function onsetBlink(){ hitCount++; const d=$('hitDot'); d.classList.add('on'); clearTimeout(d._t); d._t=setTimeout(()=>d.classList.remove('on'),180); }
+function onsetBlink(){ const d=$('hitDot'); d.classList.add('on'); clearTimeout(d._t); d._t=setTimeout(()=>d.classList.remove('on'),180); }
 function listen(){
   if(!analyser) return;
   if(micCtx.state!=='running') micCtx.resume();
@@ -524,32 +616,10 @@ function listen(){
   const rms=Math.sqrt(sum/N);
   $('meter').style.width=Math.min(100,Math.sqrt(rms)*250)+'%';
   const tr=micStream&&micStream.getAudioTracks()[0];
-  $('diag').textContent=`v6｜麥克風：${tr?tr.readyState+(tr.muted?'(靜音)':''):'無'}｜${micCtx.state} ${micCtx.sampleRate}Hz｜音量 ${rms.toFixed(4)}｜聽到按鍵 ${hitCount} 次`;
+  $('diag').textContent=`v9｜麥克風：${tr?tr.readyState+(tr.muted?'(靜音)':''):'無'}｜${micCtx.state} ${micCtx.sampleRate}Hz｜音量 ${rms.toFixed(4)}｜鋼琴聲 ${hitCount} 次｜略過非鋼琴聲 ${rejCount} 次${lastWhy?'（'+lastWhy.trim()+'）':''}`;
   const now=performance.now();
   hist.push(rms); if(hist.length>3) hist.shift();
 
-  analyser.getFloatFrequencyData(fbuf);
-  const binHz=micCtx.sampleRate/analyser.fftSize;
-  const lo=Math.floor(80/binHz), hi=Math.floor(2500/binHz);
-  const arr=Array.from(fbuf.slice(lo,hi)).sort((a,b)=>a-b); const floor=arr[Math.floor(arr.length/2)];
-  let best=-200,bk=0; for(let k=Math.floor(150/binHz);k<Math.floor(1100/binHz);k++) if(fbuf[k]>best){best=fbuf[k];bk=k;}
-  if(best-floor>15 && rms>noise*2){ const m=Math.round(69+12*Math.log2(bk*binHz/440)); $('heard').textContent=nm(m); }
-
-  if(!following || mode!=='mic') return;
-  const st=steps[stepIdx]; if(!st) return;
-  if(onsetAt<=lastAdvance) return;               // 每一次按鍵只算一步
-  if(!$('pitchChk').checked){ lastAdvance=now; advance(); return; }   // 只要聽到按鍵聲就往下
-  if(now-onsetAt>600) { lastAdvance=onsetAt; return; }  // 這一下沒彈對，等下一次按鍵
-  const thr=+$('sens').value;
-  // 要檢查哪些音：全部／只有右手／只有左手
-  const scope=$('pitchScope').value;
-  const want= scope==='rh'? st.rh : scope==='lh'? st.lh : st.midi;
-  if(!want.length){ lastAdvance=now; advance(); return; }   // 這一步該手沒有音：聽到按鍵就往下
-  // 每個音都要夠大聲，而且要比相鄰半音更大聲（避免彈錯一個半音也算對）
-  const good=ff=>{ const p=peakDb(ff,binHz,1), up=peakDb(ff*1.0595,binHz,1), dn=peakDb(ff/1.0595,binHz,1);
-    return p-floor>thr && p>=Math.max(up,dn)+3; };
-  const ok=want.every(m=>{ const f=440*Math.pow(2,(m-69)/12); return good(f); });
-  if(ok){ lastAdvance=now; advance(); }
 }
 
 // 點琴鍵
