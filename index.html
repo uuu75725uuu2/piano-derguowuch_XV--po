@@ -162,6 +162,7 @@
       <label>模式：<select id="mode"><option value="auto">自動播放</option><option value="mic">🎤 聽我彈（麥克風）</option><option value="tap">👆 點琴鍵跟彈</option></select></label>
       <label id="chkBox" style="display:none"><input type="checkbox" id="pitchChk">檢查音準</label>
       <label id="onsetBox" style="display:none">收音靈敏度<input type="range" id="onsetSens" min="1" max="10" value="7" style="width:90px"></label>
+      <label id="scopeBox" style="display:none">檢查<select id="pitchScope"><option value="all">所有的音都要對</option><option value="rh" selected>只看右手</option><option value="lh">只看左手</option></select></label>
       <label id="sensBox" style="display:none">音準門檻<input type="range" id="sens" min="6" max="35" value="15" style="width:90px" title="越往左越容易判定"></label>
       <span id="msg"></span><span id="diag" style="font-size:12px;color:#888"></span>
       <label>練習：<select id="hand"><option value="both">雙手</option><option value="rh">只有右手</option><option value="lh">只有左手</option></select></label>
@@ -406,10 +407,12 @@ let mode='auto', steps=[], stepIdx=0, tapped=new Set();
 function buildSteps(){
   const by={};
   events.forEach(e=>{ if(e.rest) return; if(opt.hand!=='both' && opt.hand!==e.hand) return;
-    (by[e.b]=by[e.b]||new Set()); e.notes.forEach(n=>by[e.b].add(n.midi)); });
+    const g=(by[e.b]=by[e.b]||{all:new Set(),rh:new Set(),lh:new Set()});
+    e.notes.forEach(n=>{ g.all.add(n.midi); g[e.hand].add(n.midi); }); });
   const bs=Object.keys(by).map(Number).sort((a,b)=>a-b);
-  steps=bs.map(b=>({lt:b,b,midi:[...by[b]]}));
-  if(opt.rep) bs.filter(b=>b>=1).forEach(b=>steps.push({lt:b+24,b,midi:[...by[b]]}));
+  const mk=(b,lt)=>({lt,b,midi:[...by[b].all],rh:[...by[b].rh],lh:[...by[b].lh]});
+  steps=bs.map(b=>mk(b,b));
+  if(opt.rep) bs.filter(b=>b>=1).forEach(b=>steps.push(mk(b,b+24)));
 }
 const NAMES=['Do','升Do','Re','升Re','Mi','Fa','升Fa','Sol','升Sol','La','升La','Si'];
 const nm=m=>NAMES[m%12];
@@ -506,7 +509,7 @@ function listen(){
   const rms=Math.sqrt(sum/N);
   $('meter').style.width=Math.min(100,Math.sqrt(rms)*250)+'%';
   const tr=micStream&&micStream.getAudioTracks()[0];
-  $('diag').textContent=`v3｜麥克風：${tr?tr.readyState+(tr.muted?'(靜音)':''):'無'}｜${micCtx.state} ${micCtx.sampleRate}Hz｜處理 ${spCalls}｜音量 ${rms.toFixed(4)}｜聽到按鍵 ${hitCount} 次`;
+  $('diag').textContent=`v4｜麥克風：${tr?tr.readyState+(tr.muted?'(靜音)':''):'無'}｜${micCtx.state} ${micCtx.sampleRate}Hz｜處理 ${spCalls}｜音量 ${rms.toFixed(4)}｜聽到按鍵 ${hitCount} 次`;
   const now=performance.now();
   hist.push(rms); if(hist.length>3) hist.shift();
 
@@ -523,12 +526,15 @@ function listen(){
   if(!$('pitchChk').checked){ lastAdvance=now; advance(); return; }   // 只要聽到按鍵聲就往下
   if(now-onsetAt>600) { lastAdvance=onsetAt; return; }  // 這一下沒彈對，等下一次按鍵
   const thr=+$('sens').value;
-  // 只檢查最高的音（旋律），伴奏通常比較小聲，不強求
-  const m=Math.max(...st.midi), f=440*Math.pow(2,(m-69)/12);
-  // 這個音要夠大聲，而且要比相鄰半音更大聲（避免彈錯一個半音也算對）
+  // 要檢查哪些音：全部／只有右手／只有左手
+  const scope=$('pitchScope').value;
+  const want= scope==='rh'? st.rh : scope==='lh'? st.lh : st.midi;
+  if(!want.length){ lastAdvance=now; advance(); return; }   // 這一步該手沒有音：聽到按鍵就往下
+  // 每個音都要夠大聲，而且要比相鄰半音更大聲（避免彈錯一個半音也算對）
   const good=ff=>{ const p=peakDb(ff,binHz,1), up=peakDb(ff*1.0595,binHz,1), dn=peakDb(ff/1.0595,binHz,1);
     return p-floor>thr && p>=Math.max(up,dn)+3; };
-  if(good(f)||good(2*f)){ lastAdvance=now; advance(); }
+  const ok=want.every(m=>{ const f=440*Math.pow(2,(m-69)/12); return good(f); });
+  if(ok){ lastAdvance=now; advance(); }
 }
 
 // 點琴鍵
@@ -547,7 +553,7 @@ function setMode(v){
   $('play').textContent= f?'▶ 開始跟彈':'▶ 播放'; $('msg').textContent='';
   if(f){ buildSteps(); stepIdx=0; showWant(); following=false; }
 }
-function updSens(){ $('sensBox').style.display=(mode==='mic'&&$('pitchChk').checked)?'':'none'; }
+function updSens(){ const on=(mode==='mic'&&$('pitchChk').checked)?'':'none'; $('sensBox').style.display=on; $('scopeBox').style.display=on; }
 $('pitchChk').onchange=updSens;
 $('mode').onchange=e=>setMode(e.target.value);
 $('play').onclick=async()=>{
