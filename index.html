@@ -616,7 +616,7 @@ function listen(){
   const rms=Math.sqrt(sum/N);
   $('meter').style.width=Math.min(100,Math.sqrt(rms)*250)+'%';
   const tr=micStream&&micStream.getAudioTracks()[0];
-  $('diag').textContent=`v9｜麥克風：${tr?tr.readyState+(tr.muted?'(靜音)':''):'無'}｜${micCtx.state} ${micCtx.sampleRate}Hz｜音量 ${rms.toFixed(4)}｜鋼琴聲 ${hitCount} 次｜略過非鋼琴聲 ${rejCount} 次${lastWhy?'（'+lastWhy.trim()+'）':''}`;
+  $('diag').textContent=`v10｜麥克風：${tr?tr.readyState+(tr.muted?'(靜音)':''):'無'}｜${micCtx.state} ${micCtx.sampleRate}Hz｜鋼琴聲 ${hitCount} 次｜略過非鋼琴聲 ${rejCount} 次${lastWhy?'（'+lastWhy.trim()+'）':''}`;
   const now=performance.now();
   hist.push(rms); if(hist.length>3) hist.shift();
 
