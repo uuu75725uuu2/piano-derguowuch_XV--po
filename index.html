@@ -158,7 +158,7 @@
     <div class="ctrls">
       <button id="play">▶ 播放</button>
       <button id="restart">⟲ 從頭</button>
-      <div class="tempo">🐢<input type="range" id="tempo" min="40" max="132" step="2" value="72">🐇<b id="tempoTxt">72 拍/分</b><button id="origTempo" style="padding:6px 10px;font-size:14px;background:#ece7dd">原速 ♩=108</button></div>
+      <div class="tempo">🐢<input type="range" id="tempo" min="40" max="132" step="2" value="72">🐇<b id="tempoTxt">72 拍/分</b><button id="origTempo" style="padding:6px 10px;font-size:14px;background:#ece7dd">原速 108</button></div>
     
     <div class="opts">
       <label>模式：<select id="mode"><option value="auto">自動播放</option><option value="mic">🎤 聽我彈（麥克風）</option><option value="tap">👆 點琴鍵跟彈</option></select></label>
@@ -227,14 +227,21 @@ function xOf(b){const s=sysOf(b),A=s.a;for(let i=0;i<A.length-1;i++){if(b>=A[i][
 function beatAt(x,y){const s=y<470?SYS[0]:SYS[1],A=s.a;x+=OX;if(x<=A[0][1])return A[0][0];
   for(let i=0;i<A.length-1;i++){if(x>=A[i][1]&&x<=A[i+1][1]){return (x-A[i][1])<(A[i+1][1]-x)?A[i][0]:A[i+1][0];}}return Math.min(24,A[A.length-1][0]);}
 // 目前音符的亮框
-const hlR=el('rect',{width:56,rx:14,fill:'#e4583e','fill-opacity':.22,stroke:'#e4583e','stroke-width':4,opacity:0});
-const hlL=el('rect',{width:56,rx:14,fill:'#1d8a86','fill-opacity':.22,stroke:'#1d8a86','stroke-width':4,opacity:0});
+// 框只畫外框、不填色，音符完全看得清楚
+const hlR=el('rect',{width:64,rx:16,fill:'none',stroke:'#e4583e','stroke-width':4,opacity:0});
+const hlL=el('rect',{width:64,rx:16,fill:'none',stroke:'#1d8a86','stroke-width':4,opacity:0});
+// 每行譜上方的進度條（走過的部分變橘色）
+const bars=SYS.map(sy=>{ const y=sy.y1-(sy.from===0?26:14); x0=sy.a[0][1]-OX, x1=sy.a[sy.a.length-1][1]-OX;
+  el('line',{x1:x0,x2:x1,y1:y,y2:y,stroke:'#000','stroke-opacity':.12,'stroke-width':8,'stroke-linecap':'round'});
+  const done=el('line',{x1:x0,x2:x0,y1:y,y2:y,stroke:'#f2a900','stroke-width':8,'stroke-linecap':'round'});
+  return {sy,done,x0,y}; });
 // 時間軸
 const ph=el('g',{});
-el('rect',{x:-4,y:0,width:8,height:10,rx:4,fill:'#f2a900',id:'phline'},ph);
-el('path',{d:'M-18 -18 L18 -18 L0 6 Z',fill:'#f2a900',id:'phtri'},ph);
-const phLine=ph.querySelector('#phline'), phTri=ph.querySelector('#phtri');
-function placeBox(r,b,range){const x=xOf(b);r.setAttribute('x',x-28);r.setAttribute('y',range[0]);r.setAttribute('height',range[1]-range[0]);r.setAttribute('opacity',1);}
+// 時間軸：只在譜的上方和下方各放一個箭頭，不畫穿過音符的線
+el('circle',{cx:0,cy:-14,r:13,fill:'#f2a900',stroke:'#fff','stroke-width':3,id:'phdot'},ph);
+el('path',{d:'M-12 2 L12 2 L0 18 Z',fill:'#f2a900',id:'phtri'},ph);
+const phBot=el('path',{d:'M-12 0 L12 0 L0 -16 Z',fill:'#f2a900'});
+function placeBox(r,b,range){const x=xOf(b);r.setAttribute('x',x-32);r.setAttribute('y',range[0]);r.setAttribute('height',range[1]-range[0]);r.setAttribute('opacity',1);}
 // 段落資訊給畫面用
 const handLayer={rh:{classList:{toggle(){}}},lh:{classList:{toggle(){}}}};
 events.forEach(e=>{e.el={classList:{toggle(){}}};});
@@ -376,7 +383,10 @@ function frame(){
   // 播放線
   const sb = b===null ? (toScore(Math.max(0,lt))??0) : b;
   const s=sysOf(Math.min(sb,24.99)), px=xOf(Math.min(sb,24.99));
-  ph.setAttribute('transform',`translate(${px},${s.y1})`); phLine.setAttribute('height',s.y2-s.y1);
+  ph.setAttribute('transform',`translate(${px},${s.y1})`);
+  ph.querySelector('#phdot').setAttribute('cy', s.from===0?-26:-14);
+  phBot.setAttribute('transform',`translate(${px},${s.y2+20})`);
+  bars.forEach(bb=>{ const x = bb.sy===s ? px : (bb.sy.from<s.from ? bb.sy.a[bb.sy.a.length-1][1]-OX : bb.x0); bb.done.setAttribute('x2',x); bb.done.setAttribute('opacity', x>bb.x0+1?1:0); });
   if(playing||following){ const sc=inner.clientWidth/1920;
     wrap.scrollLeft = px*sc - wrap.clientWidth*0.35;
     wrap.scrollTop = ((s.y1+s.y2)/2)*sc - wrap.clientHeight/2; }
@@ -514,7 +524,7 @@ function listen(){
   const rms=Math.sqrt(sum/N);
   $('meter').style.width=Math.min(100,Math.sqrt(rms)*250)+'%';
   const tr=micStream&&micStream.getAudioTracks()[0];
-  $('diag').textContent=`v5｜麥克風：${tr?tr.readyState+(tr.muted?'(靜音)':''):'無'}｜${micCtx.state} ${micCtx.sampleRate}Hz｜音量 ${rms.toFixed(4)}｜聽到按鍵 ${hitCount} 次`;
+  $('diag').textContent=`v6｜麥克風：${tr?tr.readyState+(tr.muted?'(靜音)':''):'無'}｜${micCtx.state} ${micCtx.sampleRate}Hz｜音量 ${rms.toFixed(4)}｜聽到按鍵 ${hitCount} 次`;
   const now=performance.now();
   hist.push(rms); if(hist.length>3) hist.shift();
 
