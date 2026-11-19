@@ -163,7 +163,7 @@
       <label id="chkBox" style="display:none"><input type="checkbox" id="pitchChk">檢查音準</label>
       <label id="onsetBox" style="display:none">收音靈敏度<input type="range" id="onsetSens" min="1" max="10" value="7" style="width:90px"></label>
       <label id="sensBox" style="display:none">音準門檻<input type="range" id="sens" min="6" max="35" value="15" style="width:90px" title="越往左越容易判定"></label>
-      <span id="msg"></span>
+      <span id="msg"></span><span id="diag" style="font-size:12px;color:#888"></span>
       <label>練習：<select id="hand"><option value="both">雙手</option><option value="rh">只有右手</option><option value="lh">只有左手</option></select></label>
       <label><input type="checkbox" id="snd" checked>聲音</label>
       <label><input type="checkbox" id="cnt" checked>預備拍</label>
@@ -400,6 +400,7 @@ function frame(){
 }
 requestAnimationFrame(frame);
 
+window.addEventListener('error',e=>{ const m=document.getElementById('msg'); if(m) m.textContent='⚠️ 錯誤：'+e.message; });
 /* ===== 跟彈模式：聽到（或點到）正確的音才往下 ===== */
 let mode='auto', steps=[], stepIdx=0, tapped=new Set();
 function buildSteps(){
@@ -435,22 +436,27 @@ async function startMic(){
     $('msg').textContent='⚠️ 無法使用麥克風：這個網頁要用 https 網址在 Safari／Chrome 開啟，並允許麥克風。可先改用「點琴鍵跟彈」。';
     return false;
   }
-  if(ctx.state!=='running'){ try{ await ctx.resume(); }catch(_){} }   // iOS 開麥克風後可能被暫停
-  const src=ctx.createMediaStreamSource(micStream);
-  analyser=ctx.createAnalyser(); analyser.fftSize=8192; analyser.smoothingTimeConstant=0;
+  // iPad：取得麥克風「之後」才建立專用的音訊環境，避免收到無聲訊號
+  try{ if(micCtx) micCtx.close(); }catch(_){}
+  micCtx=new (window.AudioContext||window.webkitAudioContext)();
+  try{ await micCtx.resume(); }catch(_){}
+  if(ctx.state!=='running'){ try{ await ctx.resume(); }catch(_){} }
+  const src=micCtx.createMediaStreamSource(micStream);
+  analyser=micCtx.createAnalyser(); analyser.fftSize=8192; analyser.smoothingTimeConstant=0;
   src.connect(analyser);
   // 按鍵偵測：直接逐段處理麥克風樣本（不受計時誤差影響）
-  sp=ctx.createScriptProcessor(1024,1,1); src.connect(sp);
+  sp=micCtx.createScriptProcessor(1024,1,1); src.connect(sp);
   eHist=[]; prevE=0; lastOnsetSample=-1e9; sampleClock=0;
   sp.onaudioprocess=detectOnset;
   // Safari 的分析節點要接到輸出才會運作；用音量 0 接上，不會發出聲音
-  const mute=ctx.createGain(); mute.gain.value=0; analyser.connect(mute); sp.connect(mute); mute.connect(ctx.destination);
+  const mute=micCtx.createGain(); mute.gain.value=0; analyser.connect(mute); sp.connect(mute); mute.connect(micCtx.destination);
+  hitCount=0; lastRms=0;
   fbuf=new Float32Array(analyser.frequencyBinCount); tbuf=new Float32Array(analyser.fftSize);
   hist=[]; noise=0.002; ignoreUntil=performance.now()+600; onsetAt=0; lastAdvance=0;   // 開始後 0.6 秒內不判斷
   micTimer=setInterval(listen,25); $('msg').textContent='';
   return true;
 }
-let hist=[], noise=0.002, sp=null, eHist=[], prevE=0, lastOnsetSample=-1e9, sampleClock=0, ignoreUntil=0;
+let micCtx=null, hitCount=0, lastRms=0, spCalls=0, hist=[], noise=0.002, sp=null, eHist=[], prevE=0, lastOnsetSample=-1e9, sampleClock=0, ignoreUntil=0;
 // 小型 FFT（1024 點）
 const FN=1024, ring=new Float32Array(FN), hann=new Float32Array(FN), re=new Float32Array(FN), im=new Float32Array(FN);
 for(let i=0;i<FN;i++) hann[i]=0.5-0.5*Math.cos(2*Math.PI*i/(FN-1));
@@ -461,7 +467,7 @@ function fft(){ for(let i=0;i<FN;i++){ if(i<rev[i]){ let t=re[i];re[i]=re[rev[i]
       const a=i+j, b=a+h, tr=re[b]*c-im[b]*s_, ti=re[b]*s_+im[b]*c; re[b]=re[a]-tr; im[b]=im[a]-ti; re[a]+=tr; im[a]+=ti; } } }
 let ringPos=0, prevSpec=null, fluxHist=[];
 function detectOnset(ev){
-  const x=ev.inputBuffer.getChannelData(0), H=512, sr=ctx.sampleRate;
+  const x=ev.inputBuffer.getChannelData(0), H=512, sr=micCtx.sampleRate; spCalls++;
   const v=+$('onsetSens').value;                 // 1（遲鈍）～10（靈敏）
   const k=1.6+(10-v)*0.3;                        // 比剛剛（約 70 毫秒內）大幾倍，預設 2.5
   const c=2+(10-v)*0.35;                         // 比平常背景大幾倍，預設 3
@@ -488,22 +494,24 @@ function detectOnset(ev){
   }
   sampleClock+=x.length;
 }
-function stopMic(){ if(sp){sp.onaudioprocess=null;try{sp.disconnect();}catch(_){} sp=null;} if(micTimer)clearInterval(micTimer); micTimer=null; if(micStream)micStream.getTracks().forEach(t=>t.stop()); micStream=null; analyser=null; $('meter').style.width='0'; }
+function stopMic(){ try{ if(micCtx) micCtx.close(); }catch(_){} micCtx=null; if(sp){sp.onaudioprocess=null;try{sp.disconnect();}catch(_){} sp=null;} if(micTimer)clearInterval(micTimer); micTimer=null; if(micStream)micStream.getTracks().forEach(t=>t.stop()); micStream=null; analyser=null; $('meter').style.width='0'; }
 function peakDb(f,binHz,w=2){ const c=Math.round(f/binHz); let m=-200; for(let k=c-w;k<=c+w;k++) if(fbuf[k]>m) m=fbuf[k]; return m; }
-function onsetBlink(){ const d=$('hitDot'); d.classList.add('on'); clearTimeout(d._t); d._t=setTimeout(()=>d.classList.remove('on'),180); }
+function onsetBlink(){ hitCount++; const d=$('hitDot'); d.classList.add('on'); clearTimeout(d._t); d._t=setTimeout(()=>d.classList.remove('on'),180); }
 function listen(){
   if(!analyser) return;
-  if(ctx.state!=='running') ctx.resume();
+  if(micCtx.state!=='running') micCtx.resume();
   analyser.getFloatTimeDomainData(tbuf);
   // 只看最新的約 20 毫秒，才抓得到琴鍵敲下去的那一瞬間
   const N=1024, L=tbuf.length; let sum=0; for(let i=L-N;i<L;i++) sum+=tbuf[i]*tbuf[i];
   const rms=Math.sqrt(sum/N);
   $('meter').style.width=Math.min(100,Math.sqrt(rms)*250)+'%';
+  const tr=micStream&&micStream.getAudioTracks()[0];
+  $('diag').textContent=`v3｜麥克風：${tr?tr.readyState+(tr.muted?'(靜音)':''):'無'}｜${micCtx.state} ${micCtx.sampleRate}Hz｜處理 ${spCalls}｜音量 ${rms.toFixed(4)}｜聽到按鍵 ${hitCount} 次`;
   const now=performance.now();
   hist.push(rms); if(hist.length>3) hist.shift();
 
   analyser.getFloatFrequencyData(fbuf);
-  const binHz=ctx.sampleRate/analyser.fftSize;
+  const binHz=micCtx.sampleRate/analyser.fftSize;
   const lo=Math.floor(80/binHz), hi=Math.floor(2500/binHz);
   const arr=Array.from(fbuf.slice(lo,hi)).sort((a,b)=>a-b); const floor=arr[Math.floor(arr.length/2)];
   let best=-200,bk=0; for(let k=Math.floor(150/binHz);k<Math.floor(1100/binHz);k++) if(fbuf[k]>best){best=fbuf[k];bk=k;}
